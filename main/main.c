@@ -16,7 +16,7 @@
 
 #include "mpu6500.h"
 
-#define AP_SSID "ESP32_CONFIG_WIFI"
+#define AP_SSID "VIMES_ESP32_CONFIG_WIFI"
 #define AP_PASS "12345678"
 #define MAX_STR_LEN 64
 #define WIFI_CONNECTED_BIT BIT0
@@ -56,9 +56,9 @@ float vibration_rms();
 
 const char* html_form = 
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Configuración - Vibe Measure</title>"
+    "<title>Configuración - VIMES</title>"
     "<style>body{font-family:sans-serif;padding:20px;} input{width:100%;padding:10px;margin:5px 0;} input[type=submit]{background:#007BFF;color:white;border:none;cursor:pointer;}</style></head>"
-    "<body><h2>Vibe Measure Parameters</h2>"
+    "<body><h2>VIMES Parameters</h2>"
     "<form action='/save' method='post'>"
     "<label>WiFi SSID:</label><input type='text' name='ssid' placeholder='Nombre de la red Wifi' required>"
     "<label>WiFi Pass:</label><input type='password' name='pass' placeholder='Clave Wifi'>"
@@ -431,8 +431,12 @@ float vibration_rms()
     float sum_sq_x = 0;
     float sum_sq_y = 0;
     float sum_sq_z = 0;
+    float vib_x, vib_y, vib_z;
+    float rms_x_lsb, rms_y_lsb, rms_z_lsb;
+    float rms_x_ms2, rms_y_ms2, rms_z_ms2;
+    float rms_global;
 
-    // 1. BUCLE DE MUESTREO (Captura una ventana de tiempo)
+    // Sampling Loop
     for (int i = 0; i < SAMPLES_COUNT; i++)
     {
         if (mpu6500_read_bytes(MPU6500_ACCEL_XOUT_H, raw_data, 14) == ESP_OK) 
@@ -453,9 +457,9 @@ float vibration_rms()
             gravity_z = (ALPHA * accel_z_raw) + ((1.0 - ALPHA) * gravity_z);
 
             // Obtener solo la parte dinámica (Vibración pura)
-            float vib_x = accel_x_raw - gravity_x;
-            float vib_y = accel_y_raw - gravity_y;
-            float vib_z = accel_z_raw - gravity_z;
+            vib_x = accel_x_raw - gravity_x;
+            vib_y = accel_y_raw - gravity_y;
+            vib_z = accel_z_raw - gravity_z;
 
             // Acumular cuadrados (x^2)
             sum_sq_x += (vib_x * vib_x);
@@ -470,18 +474,18 @@ float vibration_rms()
 
     // 2. CÁLCULO RMS (En unidades crudas LSB)
     // RMS = Raíz cuadrada del promedio de los cuadrados
-    float rms_x_lsb = sqrtf(sum_sq_x / SAMPLES_COUNT);
-    float rms_y_lsb = sqrtf(sum_sq_y / SAMPLES_COUNT);
-    float rms_z_lsb = sqrtf(sum_sq_z / SAMPLES_COUNT);
+    rms_x_lsb = sqrtf(sum_sq_x / SAMPLES_COUNT);
+    rms_y_lsb = sqrtf(sum_sq_y / SAMPLES_COUNT);
+    rms_z_lsb = sqrtf(sum_sq_z / SAMPLES_COUNT);
 
     // 3. CONVERSIÓN A UNIDADES FÍSICAS (m/s^2)
     // Hacemos esto AL FINAL para ahorrar operaciones matemáticas dentro del bucle
-    float rms_x_ms2 = (rms_x_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
-    float rms_y_ms2 = (rms_y_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
-    float rms_z_ms2 = (rms_z_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+    rms_x_ms2 = (rms_x_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+    rms_y_ms2 = (rms_y_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+    rms_z_ms2 = (rms_z_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
 
     // 4. CÁLCULO RMS GLOBAL (Suma Vectorial)
-    float rms_global = sqrtf((rms_x_ms2 * rms_x_ms2) + 
+    rms_global = sqrtf((rms_x_ms2 * rms_x_ms2) + 
                              (rms_y_ms2 * rms_y_ms2) + 
                              (rms_z_ms2 * rms_z_ms2));
 
