@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -33,6 +34,9 @@ char config_mqtt_user[MAX_STR_LEN] = {0};
 char config_mqtt_pass[MAX_STR_LEN] = {0};
 char config_mqtt_topic[MAX_STR_LEN] = {0};
 uint8_t configured = 0;
+float gravity_x = 0;
+float gravity_y = 0;
+float gravity_z = 0;
 
 void get_form_value(char *src, const char *key, char *dest, size_t dest_len);
 esp_err_t root_get_handler(httpd_req_t *req);
@@ -48,7 +52,7 @@ void check_factory_reset_button(void* params);
 void led_blink_task(void *pvParameter);
 void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
 void start_mqtt(void* params);
-
+float vibration_rms();
 
 const char* html_form = 
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -381,6 +385,7 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
         break;
     case MQTT_EVENT_DATA:
         ESP_LOGI(TAG, "Mensaje MQTT: %.*s", event->data_len, event->data);
+        ESP_LOGI(TAG, "TOPIC=%.*s\r\n", event->topic_len, event->topic);
         break;
     default:
         break;
@@ -389,6 +394,9 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
 
 void start_mqtt(void* params)
 {
+    char uri[128];
+    char payload[64];
+    float vibration_value;
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C inicializado correctamente");
 
@@ -396,11 +404,6 @@ void start_mqtt(void* params)
     ESP_LOGI(TAG, "Sensor MPU6500 despertado");
 
     ESP_ERROR_CHECK(mpu6500_write_byte(0x1C, 0x00));
-
-    uint8_t raw_data[14];
-    int16_t accel_x, accel_y, accel_z;
-    float ax_ms2, ay_ms2, az_ms2;
-    char uri[128];
 
     snprintf(uri, sizeof(uri), "mqtt://%s:%s", config_mqtt_ip, config_mqtt_port);
     esp_mqtt_client_config_t mqtt_cfg = {
@@ -413,23 +416,75 @@ void start_mqtt(void* params)
     esp_mqtt_client_start(client);
     while(1)
     {
+        vibration_value = vibration_rms();
+        sprintf(payload, "{\"vibracion\": %.6f}", vibration_value);
+        esp_mqtt_client_publish(client, config_mqtt_topic, payload, strlen(payload), 1, 0);
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+    }
+}
+
+float vibration_rms()
+{
+    int16_t accel_x_raw, accel_y_raw, accel_z_raw;
+    uint8_t raw_data[14];
+    
+    float sum_sq_x = 0;
+    float sum_sq_y = 0;
+    float sum_sq_z = 0;
+
+    // 1. BUCLE DE MUESTREO (Captura una ventana de tiempo)
+    for (int i = 0; i < SAMPLES_COUNT; i++)
+    {
         if (mpu6500_read_bytes(MPU6500_ACCEL_XOUT_H, raw_data, 14) == ESP_OK) 
         {
-            accel_x = (raw_data[0] << 8) | raw_data[1];
-            accel_y = (raw_data[2] << 8) | raw_data[3];
-            accel_z = (raw_data[4] << 8) | raw_data[5];
+            accel_x_raw = (int16_t)((raw_data[0] << 8) | raw_data[1]);
+            accel_y_raw = (int16_t)((raw_data[2] << 8) | raw_data[3]);
+            accel_z_raw = (int16_t)((raw_data[4] << 8) | raw_data[5]);
 
-            ax_ms2 = (accel_x / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
-            ay_ms2 = (accel_y / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
-            az_ms2 = (accel_z / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+            /* --- FILTRO PASO ALTO (DC BLOCKING) ---
+             * Separamos la vibración (AC) de la gravedad/inclinación (DC).
+             * DC = Gravedad (pasa lento)
+             * AC = Vibración (Raw - DC)
+             */
+             
+            // Estimación de gravedad (Filtro Paso Bajo Exponencial)
+            gravity_x = (ALPHA * accel_x_raw) + ((1.0 - ALPHA) * gravity_x);
+            gravity_y = (ALPHA * accel_y_raw) + ((1.0 - ALPHA) * gravity_y);
+            gravity_z = (ALPHA * accel_z_raw) + ((1.0 - ALPHA) * gravity_z);
 
-            ESP_LOGI(TAG, "Acc (m/s^2) -> X: %.2f | Y: %.2f | Z: %.2f", 
-                     ax_ms2, ay_ms2, az_ms2);
-        } 
+            // Obtener solo la parte dinámica (Vibración pura)
+            float vib_x = accel_x_raw - gravity_x;
+            float vib_y = accel_y_raw - gravity_y;
+            float vib_z = accel_z_raw - gravity_z;
+
+            // Acumular cuadrados (x^2)
+            sum_sq_x += (vib_x * vib_x);
+            sum_sq_y += (vib_y * vib_y);
+            sum_sq_z += (vib_z * vib_z);
+        }
         else 
         {
-            ESP_LOGE(TAG, "Error en la lectura");
+            ESP_LOGE(TAG, "Error leyendo muestra %d", i);
         }
-        vTaskDelay(500/portTICK_PERIOD_MS);
     }
+
+    // 2. CÁLCULO RMS (En unidades crudas LSB)
+    // RMS = Raíz cuadrada del promedio de los cuadrados
+    float rms_x_lsb = sqrtf(sum_sq_x / SAMPLES_COUNT);
+    float rms_y_lsb = sqrtf(sum_sq_y / SAMPLES_COUNT);
+    float rms_z_lsb = sqrtf(sum_sq_z / SAMPLES_COUNT);
+
+    // 3. CONVERSIÓN A UNIDADES FÍSICAS (m/s^2)
+    // Hacemos esto AL FINAL para ahorrar operaciones matemáticas dentro del bucle
+    float rms_x_ms2 = (rms_x_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+    float rms_y_ms2 = (rms_y_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+    float rms_z_ms2 = (rms_z_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
+
+    // 4. CÁLCULO RMS GLOBAL (Suma Vectorial)
+    float rms_global = sqrtf((rms_x_ms2 * rms_x_ms2) + 
+                             (rms_y_ms2 * rms_y_ms2) + 
+                             (rms_z_ms2 * rms_z_ms2));
+
+    ESP_LOGI(TAG, "Vibración Global RMS: %.6f m/s^2", rms_global);
+    return rms_global;
 }

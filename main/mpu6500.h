@@ -19,6 +19,8 @@
 
 #define GRAVITY_EARTH               9.80665f
 #define ACCEL_SCALE_FACTOR          16384.0f
+#define SAMPLES_COUNT               128    
+#define ALPHA                       0.09f
 
 esp_err_t i2c_master_init(void);
 esp_err_t mpu6500_write_byte(uint8_t reg_addr, uint8_t data);
