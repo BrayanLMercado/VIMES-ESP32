@@ -16,7 +16,7 @@
 
 #include "mpu6500.h"
 
-#define AP_SSID "VIMES_ESP32_CONFIG_WIFI"
+#define AP_SSID "VIMES_CONFIG_WIFI"
 #define AP_PASS "12345678"
 #define MAX_STR_LEN 64
 #define WIFI_CONNECTED_BIT BIT0
@@ -48,7 +48,7 @@ void init_sta_mode();
 void led_mode_config();
 void led_mode_connected();
 void led_mode_off();
-void check_factory_reset_button(void* params);
+void check_boot_button(void* params);
 void led_blink_task(void *pvParameter);
 void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
 void start_mqtt(void* params);
@@ -56,7 +56,7 @@ float vibration_rms();
 
 const char* html_form = 
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Configuración - VIMES</title>"
+    "<title>VIMES Configuration</title>"
     "<style>body{font-family:sans-serif;padding:20px;} input{width:100%;padding:10px;margin:5px 0;} input[type=submit]{background:#007BFF;color:white;border:none;cursor:pointer;}</style></head>"
     "<body><h2>VIMES Parameters</h2>"
     "<form action='/save' method='post'>"
@@ -110,9 +110,8 @@ void app_main(void) {
         }
         nvs_close(handle);
     }
-
     if (configured == 1) {
-        xTaskCreatePinnedToCore(check_factory_reset_button,"CLEAR CONFIG",1024,NULL,5,NULL,1);
+        xTaskCreatePinnedToCore(check_boot_button,"CLEAR CONFIG",1024,NULL,5,NULL,1);
         init_sta_mode();
     } else {
         init_ap_mode();
@@ -266,7 +265,7 @@ void init_ap_mode()
             .ssid = AP_SSID,
             .ssid_len = strlen(AP_SSID), 
             .password = AP_PASS, 
-            .max_connection = 4, 
+            .max_connection = 1, 
             .authmode = WIFI_AUTH_WPA_WPA2_PSK},
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
@@ -328,7 +327,7 @@ void led_mode_off()
     gpio_set_level(LED_GPIO, 0);
 }
 
-void check_factory_reset_button(void* params)
+void check_boot_button(void* params)
 {
     while(1){
         if (gpio_get_level(BUTTON_GPIO) == 0)
@@ -436,7 +435,6 @@ float vibration_rms()
     float rms_x_ms2, rms_y_ms2, rms_z_ms2;
     float rms_global;
 
-    // Sampling Loop
     for (int i = 0; i < SAMPLES_COUNT; i++)
     {
         if (mpu6500_read_bytes(MPU6500_ACCEL_XOUT_H, raw_data, 14) == ESP_OK) 
@@ -444,24 +442,17 @@ float vibration_rms()
             accel_x_raw = (int16_t)((raw_data[0] << 8) | raw_data[1]);
             accel_y_raw = (int16_t)((raw_data[2] << 8) | raw_data[3]);
             accel_z_raw = (int16_t)((raw_data[4] << 8) | raw_data[5]);
-
-            /* --- FILTRO PASO ALTO (DC BLOCKING) ---
-             * Separamos la vibración (AC) de la gravedad/inclinación (DC).
-             * DC = Gravedad (pasa lento)
-             * AC = Vibración (Raw - DC)
-             */
              
-            // Estimación de gravedad (Filtro Paso Bajo Exponencial)
+            //Filtro Pasa-Baja Exponencial
             gravity_x = (ALPHA * accel_x_raw) + ((1.0 - ALPHA) * gravity_x);
             gravity_y = (ALPHA * accel_y_raw) + ((1.0 - ALPHA) * gravity_y);
             gravity_z = (ALPHA * accel_z_raw) + ((1.0 - ALPHA) * gravity_z);
 
-            // Obtener solo la parte dinámica (Vibración pura)
+            //cálculo de la vibración (componente AC)
             vib_x = accel_x_raw - gravity_x;
             vib_y = accel_y_raw - gravity_y;
             vib_z = accel_z_raw - gravity_z;
 
-            // Acumular cuadrados (x^2)
             sum_sq_x += (vib_x * vib_x);
             sum_sq_y += (vib_y * vib_y);
             sum_sq_z += (vib_z * vib_z);
@@ -472,19 +463,17 @@ float vibration_rms()
         }
     }
 
-    // 2. CÁLCULO RMS (En unidades crudas LSB)
-    // RMS = Raíz cuadrada del promedio de los cuadrados
+    //CÁLCULO RMS EN LSB
     rms_x_lsb = sqrtf(sum_sq_x / SAMPLES_COUNT);
     rms_y_lsb = sqrtf(sum_sq_y / SAMPLES_COUNT);
     rms_z_lsb = sqrtf(sum_sq_z / SAMPLES_COUNT);
 
-    // 3. CONVERSIÓN A UNIDADES FÍSICAS (m/s^2)
-    // Hacemos esto AL FINAL para ahorrar operaciones matemáticas dentro del bucle
+    //CONVERSIÓN A UNIDADES FÍSICAS (m/s^2)
     rms_x_ms2 = (rms_x_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
     rms_y_ms2 = (rms_y_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
     rms_z_ms2 = (rms_z_lsb / ACCEL_SCALE_FACTOR) * GRAVITY_EARTH;
 
-    // 4. CÁLCULO RMS GLOBAL (Suma Vectorial)
+    //CÁLCULO RMS GLOBAL (Suma Vectorial)
     rms_global = sqrtf((rms_x_ms2 * rms_x_ms2) + 
                              (rms_y_ms2 * rms_y_ms2) + 
                              (rms_z_ms2 * rms_z_ms2));
