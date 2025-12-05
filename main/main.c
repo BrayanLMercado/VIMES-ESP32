@@ -110,8 +110,8 @@ void app_main(void) {
         }
         nvs_close(handle);
     }
+    xTaskCreatePinnedToCore(check_boot_button,"CLEAR CONFIG",1024,NULL,5,NULL,1);
     if (configured == 1) {
-        xTaskCreatePinnedToCore(check_boot_button,"CLEAR CONFIG",1024,NULL,5,NULL,1);
         init_sta_mode();
     } else {
         init_ap_mode();
@@ -329,6 +329,7 @@ void led_mode_off()
 
 void check_boot_button(void* params)
 {
+    int count;
     while(1){
         if (gpio_get_level(BUTTON_GPIO) == 0)
         {
@@ -336,12 +337,12 @@ void check_boot_button(void* params)
             if (gpio_get_level(BUTTON_GPIO) == 0)
             {
                 ESP_LOGW(TAG, "Boton presionado. Manten 5s para borrar datos...");
-                int count = 0;
+                count = 0;
                 while (gpio_get_level(BUTTON_GPIO) == 0 && count < 50)
                 {
-                    vTaskDelay(pdMS_TO_TICKS(100));
                     count++;
                     gpio_set_level(LED_GPIO, count % 2);
+                    vTaskDelay(100/portTICK_PERIOD_MS);
                 }
 
                 if (count >= 50)
