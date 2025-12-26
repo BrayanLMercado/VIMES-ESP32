@@ -419,7 +419,7 @@ void start_mqtt(void* params)
         vibration_value = vibration_rms();
         sprintf(payload, "{\"vibracion\": %.6f}", vibration_value);
         esp_mqtt_client_publish(client, config_mqtt_topic, payload, strlen(payload), 1, 0);
-        vTaskDelay(30/portTICK_PERIOD_MS);
+        vTaskDelay(10/portTICK_PERIOD_MS);
     }
 }
 
